@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.182.0/http/server.ts";
-// --- 关键修正：使用了正确的导入路径和模块 ---
 import { TextLineStream } from "https://deno.land/std@0.224.0/streams/text_line_stream.ts";
 
 // 1. 配置项
@@ -113,7 +112,7 @@ async function handler(req) {
         });
       }
 
-      // --- 关键修改：使用新的转换逻辑 ---
+      // --- 关键修改：更简洁、可靠的流式处理 ---
       const chatCompletionId = `chatcmpl-${generateRandomId(24)}`;
       const created = Math.floor(Date.now() / 1000);
 
@@ -142,30 +141,15 @@ async function handler(req) {
             } catch (e) {
               console.warn("Could not parse line:", line);
             }
+          },
+          // 在流结束时自动添加 [DONE]
+          flush(controller) {
+            controller.enqueue("data: [DONE]\n\n");
           }
         }))
         .pipeThrough(new TextEncoderStream());
       
-      // 添加 [DONE] 标志
-      const finalStream = new ReadableStream({
-          async start(controller) {
-              const reader = transformedStream.getReader();
-              try {
-                  while(true) {
-                      const { done, value } = await reader.read();
-                      if (done) break;
-                      controller.enqueue(value);
-                  }
-              } finally {
-                  reader.releaseLock();
-              }
-              controller.enqueue("data: [DONE]\n\n");
-              controller.close();
-          }
-      });
-
-
-      return new Response(finalStream, {
+      return new Response(transformedStream, {
         status: 200,
         headers: {
           ...corsHeaders,
