@@ -4,20 +4,21 @@ import { TextLineStream } from "https://deno.land/std@0.224.0/streams/text_line_
 // 1. 配置项
 const TARGET_URL = "https://free.stockai.trade/api/chat";
 
+// --- 关键修正：更新为更可能正确的模型 ID ---
 const MODEL_MAPPING = {
-  "grok-4-fast": "grok/grok-4-fast",
-  "grok-4-fast-live": "grok/grok-4-fast-live-search",
-  "deepseek-v3.1": "deepseek/deepseek-chat-v3.1",
-  "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
-  "glm-4.5-air": "zhipu/glm-4.5-air",
-  "gpt-4o-mini": "openai/gpt-4o-mini",
-  "gpt-5-nano": "openai/gpt-5-nano",
-  "kimi-k2": "moonshot/kimi-k2",
-  "llama-4-scout": "meta/llama-4-scout",
-  "meituan-longcat-flash": "meituan/longcat-flash-chat",
-  "mistral-small-3.2": "mistral/mistral-small-3.2",
-  "openai-gpt-oss-20b": "openai/gpt-oss-20b",
-  "qwen3-coder-480b": "qwen/qwen3-coder-480b-a35b"
+  "grok-4-fast": "grok-4-fast",
+  "grok-4-fast-live-search": "grok-4-fast-live-search",
+  "deepseek-v3.1": "deepseek-v3.1",
+  "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+  "glm-4.5-air": "glm-4.5-air",
+  "gpt-4o-mini": "gpt-4o-mini",
+  "gpt-5-nano": "gpt-5-nano",
+  "kimi-k2": "kimi-k2",
+  "llama-4-scout": "llama-4-scout",
+  "meituan-longcat-flash-chat": "meituan-longcat-flash-chat",
+  "mistral-small-3.2": "mistral-small-3.2",
+  "openai-gpt-oss-20b": "openai-gpt-oss-20b",
+  "qwen3-coder-480b-a35b": "qwen3-coder-480b-a35b"
 };
 
 const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
@@ -28,7 +29,7 @@ const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
 }));
 
 function generateRandomId(length = 16) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01223456789';
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -74,7 +75,7 @@ async function handler(req) {
 
       const targetModel = MODEL_MAPPING[openaiRequest.model];
       if (!targetModel) {
-        return new Response(JSON.stringify({ error: `Model '${openaiRequest.model}' is not supported.` }), {
+        return new Response(JSON.stringify({ error: `Model '${openaiRequest.model}' is not supported by proxy.` }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -120,71 +121,5 @@ async function handler(req) {
         .pipeThrough(new TextLineStream())
         .pipeThrough(new TransformStream({
           transform(line, controller) {
-            console.log("Upstream Raw Line:", line); // 保留日志
-
             if (line.startsWith("data: ")) {
-              const jsonString = line.substring(5).trim();
-              if (jsonString === '[DONE]') return;
-              
-              try {
-                const originalJson = JSON.parse(jsonString);
-                
-                // --- 关键修改：增加兼容性 ---
-                let content = null;
-                if (originalJson.type === 'text-delta' && typeof originalJson.delta === 'string') {
-                  content = originalJson.delta;
-                } else if (originalJson.type === 'text' && typeof originalJson.text === 'string') {
-                  // 兼容 type 为 'text' 且内容在 'text' 字段的情况
-                  content = originalJson.text;
-                }
-                
-                if (content !== null) {
-                  const openaiChunk = {
-                    id: chatCompletionId,
-                    object: "chat.completion.chunk",
-                    created: created,
-                    model: openaiRequest.model,
-                    choices: [{
-                      index: 0,
-                      delta: { content: content },
-                      finish_reason: null,
-                    }],
-                  };
-                  controller.enqueue(`data: ${JSON.stringify(openaiChunk)}\n\n`);
-                }
-              } catch (e) {
-                console.warn("Could not parse JSON part:", jsonString);
-              }
-            }
-          },
-          flush(controller) {
-            controller.enqueue("data: [DONE]\n\n");
-          }
-        }))
-        .pipeThrough(new TextEncoderStream());
-      
-      return new Response(transformedStream, {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-        },
-      });
-
-    } catch (error) {
-      console.error("Error:", error);
-      return new Response(JSON.stringify({ error: "Internal Server Error" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-  }
-
-  return new Response("Not Found", { status: 404, headers: corsHeaders });
-}
-
-// 3. 启动 Deno 服务器
-console.log("Server running on http://localhost:8000");
-serve(handler);
+              const
