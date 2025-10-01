@@ -3,7 +3,6 @@ import { serve } from "https://deno.land/std@0.182.0/http/server.ts";
 // 1. 配置项
 const TARGET_URL = "https://free.stockai.trade/api/chat";
 
-// 模型映射：Key 是我们提供给客户端的 OpenAI 模型 ID，Value 是目标 API 需要的真实模型 ID
 const MODEL_MAPPING = {
   "grok-4-fast": "grok/grok-4-fast",
   "grok-4-fast-live": "grok/grok-4-fast-live-search",
@@ -20,7 +19,6 @@ const MODEL_MAPPING = {
   "qwen3-coder-480b": "qwen/qwen3-coder-480b-a35b"
 };
 
-// 动态生成 OpenAI 格式的模型列表
 const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
   id: modelId,
   object: "model",
@@ -28,7 +26,6 @@ const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
   owned_by: "system",
 }));
 
-// 辅助函数：生成一个随机的 ID
 function generateRandomId(length = 16) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
@@ -52,7 +49,6 @@ async function handler(req) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // /v1/models 接口，用于给客户端提供模型列表
   if (path === "/v1/models" && req.method === "GET") {
     return new Response(JSON.stringify({
       object: "list",
@@ -63,7 +59,6 @@ async function handler(req) {
     });
   }
 
-  // /v1/chat/completions 接口，处理聊天请求
   if (path === "/v1/chat/completions" && req.method === "POST") {
     try {
       const openaiRequest = await req.json();
@@ -84,23 +79,21 @@ async function handler(req) {
         });
       }
 
-      // 构造目标 API 需要的请求体 (Payload)
       const targetRequestBody = {
         model: targetModel,
         webSearch: false,
-        id: generateRandomId(), // 随机生成对话 ID
+        id: generateRandomId(),
         messages: [{
           parts: [{
             type: "text",
             text: userMessage.content,
           }],
-          id: generateRandomId(), // 随机生成消息 ID
+          id: generateRandomId(),
           role: "user",
         }],
         trigger: "submit-message",
       };
 
-      // 发送到目标 API
       const response = await fetch(TARGET_URL, {
         method: "POST",
         headers: {
@@ -113,10 +106,15 @@ async function handler(req) {
         body: JSON.stringify(targetRequestBody),
       });
       
-      // 将目标 API 的响应直接流式传输回客户端
-      return new Response(response.body, {
+      // --- 关键修改 ---
+      // 先完整读取目标服务器的响应体
+      const responseBody = await response.text();
+      const contentType = response.headers.get("Content-Type") || "application/json";
+
+      // 然后再创建一个新的、干净的响应，确保 CORS 头部完整
+      return new Response(responseBody, {
         status: response.status,
-        headers: { ...corsHeaders, "Content-Type": response.headers.get("Content-Type") || "application/json" },
+        headers: { ...corsHeaders, "Content-Type": contentType },
       });
 
     } catch (error) {
