@@ -1,25 +1,42 @@
 import { serve } from "https://deno.land/std@0.182.0/http/server.ts";
 
 // 1. 配置项
-const TARGET_URL = "https://api.heckai.weight-wave.com/api/ha/v1/chat";
+const TARGET_URL = "https://free.stockai.trade/api/chat";
 
+// 模型映射：Key 是我们提供给客户端的 OpenAI 模型 ID，Value 是目标 API 需要的真实模型 ID
 const MODEL_MAPPING = {
-  "gemini-2.5-flash": "Gemini 2.5 Flash",
-  "deepseek-v3": "DeepSeek V3",
-  "deepseek-r1-pro": "DeepSeek R1 Pro",
-  "chatgpt-4o-mini": "ChatGPT 4o mini",
-  "chatgpt-4.1-mini": "ChatGPT-4.1 mini",
-  "grok-3-mini": "Grok 3 mini",
-  "llama-4-scout": "Llama 4 Scout",
-  "gpt-5-mini": "GPT-5 Mini"
+  "grok-4-fast": "grok/grok-4-fast",
+  "grok-4-fast-live": "grok/grok-4-fast-live-search",
+  "deepseek-v3.1": "deepseek/deepseek-chat-v3.1",
+  "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
+  "glm-4.5-air": "zhipu/glm-4.5-air",
+  "gpt-4o-mini": "openai/gpt-4o-mini",
+  "gpt-5-nano": "openai/gpt-5-nano",
+  "kimi-k2": "moonshot/kimi-k2",
+  "llama-4-scout": "meta/llama-4-scout",
+  "meituan-longcat-flash": "meituan/longcat-flash-chat",
+  "mistral-small-3.2": "mistral/mistral-small-3.2",
+  "openai-gpt-oss-20b": "openai/gpt-oss-20b",
+  "qwen3-coder-480b": "qwen/qwen3-coder-480b-a35b"
 };
 
+// 动态生成 OpenAI 格式的模型列表
 const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
   id: modelId,
   object: "model",
   created: Math.floor(Date.now() / 1000),
   owned_by: "system",
 }));
+
+// 辅助函数：生成一个随机的 ID
+function generateRandomId(length = 16) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
 
 // 2. HTTP 请求处理函数
 async function handler(req) {
@@ -35,6 +52,7 @@ async function handler(req) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
+  // /v1/models 接口，用于给客户端提供模型列表
   if (path === "/v1/models" && req.method === "GET") {
     return new Response(JSON.stringify({
       object: "list",
@@ -45,21 +63,12 @@ async function handler(req) {
     });
   }
 
+  // /v1/chat/completions 接口，处理聊天请求
   if (path === "/v1/chat/completions" && req.method === "POST") {
     try {
-      // 从客户端获取 Authorization 头，我们把它用作 sessionId
-      const authHeaderAsSessionId = req.headers.get("Authorization");
-      if (!authHeaderAsSessionId) {
-          return new Response(JSON.stringify({ error: "Authorization header (used as sessionId) is missing." }), {
-              status: 401,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-      }
-      // 移除客户端可能自动添加的 "Bearer " 前缀
-      const sessionId = authHeaderAsSessionId.replace(/^Bearer\s+/, '');
-
       const openaiRequest = await req.json();
       const userMessage = openaiRequest.messages?.findLast(m => m.role === 'user');
+
       if (!userMessage || !userMessage.content) {
         return new Response(JSON.stringify({ error: "No user message found" }), {
           status: 400,
@@ -75,30 +84,36 @@ async function handler(req) {
         });
       }
 
+      // 构造目标 API 需要的请求体 (Payload)
       const targetRequestBody = {
-        model: targetModel, 
-        question: userMessage.content,
-        language: "English",
-        // --- 关键修改：使用从客户端获取的 sessionId ---
-        sessionId: sessionId,
-        previousQuestion: null,
-        previousAnswer: null,
-        imgUrls: [],
-        superSmartMode: false,
+        model: targetModel,
+        webSearch: false,
+        id: generateRandomId(), // 随机生成对话 ID
+        messages: [{
+          parts: [{
+            type: "text",
+            text: userMessage.content,
+          }],
+          id: generateRandomId(), // 随机生成消息 ID
+          role: "user",
+        }],
+        trigger: "submit-message",
       };
 
+      // 发送到目标 API
       const response = await fetch(TARGET_URL, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Accept": "*/*",
-          "Origin": "https://heck.ai",
-          "Referer": "https://api.heckai.weight-wave.com/",
-          "User-Agent": "Mozilla/5.0",
+          "accept": "*/*",
+          "content-type": "application/json",
+          "origin": "https://free.stockai.trade",
+          "referer": "https://free.stockai.trade/",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
         },
         body: JSON.stringify(targetRequestBody),
       });
       
+      // 将目标 API 的响应直接流式传输回客户端
       return new Response(response.body, {
         status: response.status,
         headers: { ...corsHeaders, "Content-Type": response.headers.get("Content-Type") || "application/json" },
