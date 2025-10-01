@@ -1,12 +1,8 @@
 import { serve } from "https://deno.land/std@0.182.0/http/server.ts";
 
 // 1. 配置项
-// 目标 API URL (根据上一个请求)
 const TARGET_URL = "https://api.heckai.weight-wave.com/api/ha/v1/chat";
 
-// --- 模型配置 (根据您的截图更新) ---
-
-// a. 定义符合 OpenAI 规范的模型 ID 及其对应的真实名称
 const MODEL_MAPPING = {
   "gemini-2.5-flash": "Gemini 2.5 Flash",
   "deepseek-v3": "DeepSeek V3",
@@ -18,7 +14,6 @@ const MODEL_MAPPING = {
   "gpt-5-mini": "GPT-5 Mini"
 };
 
-// b. 根据上面的映射关系，自动生成对外暴露的 OpenAI 模型列表
 const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
   id: modelId,
   object: "model",
@@ -40,27 +35,28 @@ async function handler(req) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // 路由 1: /v1/models
   if (path === "/v1/models" && req.method === "GET") {
     return new Response(JSON.stringify({
       object: "list",
-      data: OPENAI_MODELS, // 返回我们新生成的模型列表
+      data: OPENAI_MODELS,
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  // 路由 2: /v1/chat/completions
   if (path === "/v1/chat/completions" && req.method === "POST") {
     try {
-      const authHeader = req.headers.get("Authorization");
-      if (!authHeader) {
-          return new Response(JSON.stringify({ error: "Authorization header is missing" }), {
+      // 从客户端获取 Authorization 头，我们把它用作 sessionId
+      const authHeaderAsSessionId = req.headers.get("Authorization");
+      if (!authHeaderAsSessionId) {
+          return new Response(JSON.stringify({ error: "Authorization header (used as sessionId) is missing." }), {
               status: 401,
               headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
       }
+      // 移除客户端可能自动添加的 "Bearer " 前缀
+      const sessionId = authHeaderAsSessionId.replace(/^Bearer\s+/, '');
 
       const openaiRequest = await req.json();
       const userMessage = openaiRequest.messages?.findLast(m => m.role === 'user');
@@ -71,7 +67,6 @@ async function handler(req) {
         });
       }
 
-      // 使用映射表转换模型名称
       const targetModel = MODEL_MAPPING[openaiRequest.model];
       if (!targetModel) {
         return new Response(JSON.stringify({ error: `Model '${openaiRequest.model}' is not supported.` }), {
@@ -81,12 +76,11 @@ async function handler(req) {
       }
 
       const targetRequestBody = {
-        // 注意：这里的 model 字段可能需要根据 API 的实际情况调整
-        // 假设 API 接受的是截图中的原始名称, e.g., "DeepSeek V3"
         model: targetModel, 
         question: userMessage.content,
         language: "English",
-        sessionId: crypto.randomUUID(),
+        // --- 关键修改：使用从客户端获取的 sessionId ---
+        sessionId: sessionId,
         previousQuestion: null,
         previousAnswer: null,
         imgUrls: [],
@@ -98,7 +92,6 @@ async function handler(req) {
         headers: {
           "Content-Type": "application/json",
           "Accept": "*/*",
-          "Authorization": authHeader,
           "Origin": "https://heck.ai",
           "Referer": "https://api.heckai.weight-wave.com/",
           "User-Agent": "Mozilla/5.0",
