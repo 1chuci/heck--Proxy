@@ -111,7 +111,7 @@ async function handler(req) {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
-      
+
       const chatCompletionId = `chatcmpl-${generateRandomId(24)}`;
       const created = Math.floor(Date.now() / 1000);
 
@@ -120,28 +120,34 @@ async function handler(req) {
         .pipeThrough(new TextLineStream())
         .pipeThrough(new TransformStream({
           transform(line, controller) {
-            // --- 这就是我们增加的“侦探”代码 ---
-            console.log("Upstream Raw Line:", line);
+            // --- 关键修正：处理 SSE 格式 ---
+            if (line.startsWith("data: ")) {
+              const jsonString = line.substring(5).trim();
 
-            if (line.trim() === '') return;
-            try {
-              const originalJson = JSON.parse(line);
-              if (originalJson.type === 'text-delta' && originalJson.delta) {
-                const openaiChunk = {
-                  id: chatCompletionId,
-                  object: "chat.completion.chunk",
-                  created: created,
-                  model: openaiRequest.model,
-                  choices: [{
-                    index: 0,
-                    delta: { content: originalJson.delta },
-                    finish_reason: null,
-                  }],
-                };
-                controller.enqueue(`data: ${JSON.stringify(openaiChunk)}\n\n`);
+              // 忽略上游发来的 [DONE] 信号，我们自己会生成
+              if (jsonString === '[DONE]') {
+                return;
               }
-            } catch (e) {
-              // We intentionally ignore parse errors, but the log above will show us the raw line.
+              
+              try {
+                const originalJson = JSON.parse(jsonString);
+                if (originalJson.type === 'text-delta' && originalJson.delta) {
+                  const openaiChunk = {
+                    id: chatCompletionId,
+                    object: "chat.completion.chunk",
+                    created: created,
+                    model: openaiRequest.model,
+                    choices: [{
+                      index: 0,
+                      delta: { content: originalJson.delta },
+                      finish_reason: null,
+                    }],
+                  };
+                  controller.enqueue(`data: ${JSON.stringify(openaiChunk)}\n\n`);
+                }
+              } catch (e) {
+                console.warn("Could not parse JSON part:", jsonString);
+              }
             }
           },
           flush(controller) {
