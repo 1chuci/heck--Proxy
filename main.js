@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.182.0/http/server.ts";
+import { readableStreamFromIterable } from "https://deno.land/std@0.224.0/streams/readable_stream_from_iterable.ts";
 
 // 1. 配置项
 const TARGET_URL = "https://free.stockai.trade/api/chat";
@@ -35,6 +36,54 @@ function generateRandomId(length = 16) {
   return result;
 }
 
+// --- 关键修改：格式转换的"翻译官" ---
+async function* transformStream(sourceStream) {
+  const reader = sourceStream.getReader();
+  const decoder = new TextDecoder();
+  const chatCompletionId = `chatcmpl-${generateRandomId(24)}`;
+  const created = Math.floor(Date.now() / 1000);
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+      for (const line of lines) {
+        try {
+          const originalJson = JSON.parse(line);
+          
+          if (originalJson.type === 'text-delta' && originalJson.delta) {
+            const openaiChunk = {
+              id: chatCompletionId,
+              object: "chat.completion.chunk",
+              created: created,
+              model: originalJson.model || "gpt-4o-mini", // 使用一个默认模型
+              choices: [{
+                index: 0,
+                delta: { content: originalJson.delta },
+                finish_reason: null,
+              }],
+            };
+            // 发送 OpenAI 格式的数据块，并确保以 "data: " 开头，以 "\n\n" 结尾
+            yield `data: ${JSON.stringify(openaiChunk)}\n\n`;
+          }
+        } catch (e) {
+          // 忽略无法解析的行
+          console.warn("Could not parse line:", line);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  // 发送结束标志
+  yield `data: [DONE]\n\n`;
+}
+
+
 // 2. HTTP 请求处理函数
 async function handler(req) {
   const url = new URL(req.url);
@@ -64,7 +113,7 @@ async function handler(req) {
       const openaiRequest = await req.json();
       const userMessage = openaiRequest.messages?.findLast(m => m.role === 'user');
 
-      if (!userMessage || !userMessage.content) {
+      if (!userMessage || !user-message.content) {
         return new Response(JSON.stringify({ error: "No user message found" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -84,10 +133,7 @@ async function handler(req) {
         webSearch: false,
         id: generateRandomId(),
         messages: [{
-          parts: [{
-            type: "text",
-            text: userMessage.content,
-          }],
+          parts: [{ type: "text", text: userMessage.content }],
           id: generateRandomId(),
           role: "user",
         }],
@@ -101,20 +147,30 @@ async function handler(req) {
           "content-type": "application/json",
           "origin": "https://free.stockai.trade",
           "referer": "https://free.stockai.trade/",
-          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
+          "user-agent": "Mozilla/5.0",
         },
         body: JSON.stringify(targetRequestBody),
       });
-      
-      // --- 关键修改 ---
-      // 先完整读取目标服务器的响应体
-      const responseBody = await response.text();
-      const contentType = response.headers.get("Content-Type") || "application/json";
 
-      // 然后再创建一个新的、干净的响应，确保 CORS 头部完整
-      return new Response(responseBody, {
-        status: response.status,
-        headers: { ...corsHeaders, "Content-Type": contentType },
+      if (!response.ok || !response.body) {
+          const errorBody = await response.text();
+          return new Response(JSON.stringify({ error: `Upstream error: ${response.status} ${errorBody}` }), {
+              status: 502,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+      }
+
+      // --- 关键修改：使用"翻译官"处理流式响应 ---
+      const transformedStream = readableStreamFromIterable(transformStream(response.body));
+      
+      return new Response(transformedStream, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream", // 必须是这个类型
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
       });
 
     } catch (error) {
