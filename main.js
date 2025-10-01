@@ -28,7 +28,7 @@ const OPENAI_MODELS = Object.keys(MODEL_MAPPING).map(modelId => ({
 }));
 
 function generateRandomId(length = 16) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01223456789';
   let result = '';
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -120,18 +120,25 @@ async function handler(req) {
         .pipeThrough(new TextLineStream())
         .pipeThrough(new TransformStream({
           transform(line, controller) {
-            // --- 关键修正：处理 SSE 格式 ---
+            console.log("Upstream Raw Line:", line); // 保留日志
+
             if (line.startsWith("data: ")) {
               const jsonString = line.substring(5).trim();
-
-              // 忽略上游发来的 [DONE] 信号，我们自己会生成
-              if (jsonString === '[DONE]') {
-                return;
-              }
+              if (jsonString === '[DONE]') return;
               
               try {
                 const originalJson = JSON.parse(jsonString);
-                if (originalJson.type === 'text-delta' && originalJson.delta) {
+                
+                // --- 关键修改：增加兼容性 ---
+                let content = null;
+                if (originalJson.type === 'text-delta' && typeof originalJson.delta === 'string') {
+                  content = originalJson.delta;
+                } else if (originalJson.type === 'text' && typeof originalJson.text === 'string') {
+                  // 兼容 type 为 'text' 且内容在 'text' 字段的情况
+                  content = originalJson.text;
+                }
+                
+                if (content !== null) {
                   const openaiChunk = {
                     id: chatCompletionId,
                     object: "chat.completion.chunk",
@@ -139,7 +146,7 @@ async function handler(req) {
                     model: openaiRequest.model,
                     choices: [{
                       index: 0,
-                      delta: { content: originalJson.delta },
+                      delta: { content: content },
                       finish_reason: null,
                     }],
                   };
