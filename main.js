@@ -111,8 +111,7 @@ async function handler(req) {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
-
-      // --- 关键修改：更简洁、可靠的流式处理 ---
+      
       const chatCompletionId = `chatcmpl-${generateRandomId(24)}`;
       const created = Math.floor(Date.now() / 1000);
 
@@ -121,6 +120,9 @@ async function handler(req) {
         .pipeThrough(new TextLineStream())
         .pipeThrough(new TransformStream({
           transform(line, controller) {
+            // --- 这就是我们增加的“侦探”代码 ---
+            console.log("Upstream Raw Line:", line);
+
             if (line.trim() === '') return;
             try {
               const originalJson = JSON.parse(line);
@@ -139,10 +141,9 @@ async function handler(req) {
                 controller.enqueue(`data: ${JSON.stringify(openaiChunk)}\n\n`);
               }
             } catch (e) {
-              console.warn("Could not parse line:", line);
+              // We intentionally ignore parse errors, but the log above will show us the raw line.
             }
           },
-          // 在流结束时自动添加 [DONE]
           flush(controller) {
             controller.enqueue("data: [DONE]\n\n");
           }
